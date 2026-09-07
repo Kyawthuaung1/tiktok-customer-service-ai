@@ -111,6 +111,66 @@ def _company_records(company_data):
     return results
 
 
+def product_name_in_query(query: str, product_name: str) -> bool:
+    """
+    Product retrieval must be conservative.
+
+    We only consider a product matched when:
+    - the complete product name appears in the query, or
+    - all meaningful product-name tokens appear in the query.
+    """
+
+    q = normalize(query)
+    name = normalize(product_name)
+
+    if not q or not name:
+        return False
+
+    if name in q:
+        return True
+
+    query_words = set(
+        re.findall(r"[a-z0-9]+", q)
+    )
+
+    name_words = [
+        word
+        for word in re.findall(
+            r"[a-z0-9]+",
+            name,
+        )
+        if len(word) >= 2
+    ]
+
+    if not name_words:
+        return False
+
+    return all(
+        word in query_words
+        for word in name_words
+    )
+
+
+def search_product(query: str):
+    matches = []
+
+    for item in _product_records(
+        load_knowledge()["products"]
+    ):
+        if product_name_in_query(
+            query,
+            item["name"],
+        ):
+            matches.append({
+                "type": "product",
+                "score": 100,
+                "name": item["name"],
+                "data": item["data"],
+            })
+
+    return matches
+
+
 def search_knowledge(query: str, limit: int = 5):
     knowledge = load_knowledge()
 
@@ -119,110 +179,80 @@ def search_knowledge(query: str, limit: int = 5):
     if not q:
         return []
 
-    scored = []
+    results = []
 
-    # -----------------------------
-    # Products
-    # -----------------------------
-    for item in _product_records(knowledge["products"]):
-        name = normalize(item["name"])
-        score = 0
+    # -------------------------------------------------
+    # PRODUCTS
+    # -------------------------------------------------
+    product_matches = search_product(q)
 
-        if q == name:
-            score += 100
+    if product_matches:
+        return product_matches[:limit]
 
-        if name in q:
-            score += 80
-
-        query_words = q.split()
-        name_words = name.split()
-
-        for word in name_words:
-            if len(word) >= 2 and word in query_words:
-                score += 20
-
-        if score > 0:
-            scored.append({
-                "type": "product",
-                "score": score,
-                "name": item["name"],
-                "data": item["data"],
-            })
-
-    # -----------------------------
+    # -------------------------------------------------
     # FAQ
-    # -----------------------------
+    # -------------------------------------------------
+    query_words = set(
+        re.findall(r"[a-z0-9]+|[\u1000-\u109f]+", q)
+    )
+
     for item in _faq_records(knowledge["faq"]):
         question = normalize(item["question"])
 
         score = 0
 
-        if q == question:
-            score += 90
+        if question == q:
+            score = 100
 
-        if question in q:
-            score += 60
+        elif question in q:
+            score = 80
 
-        query_words = set(q.split())
+        else:
+            faq_words = set(
+                re.findall(
+                    r"[a-z0-9]+|[\u1000-\u109f]+",
+                    question,
+                )
+            )
 
-        for word in question.split():
-            if len(word) >= 2 and word in query_words:
-                score += 10
+            common = query_words & faq_words
+
+            if len(common) >= 2:
+                score = len(common) * 10
 
         if score > 0:
-            scored.append({
+            results.append({
                 "type": "faq",
                 "score": score,
                 "question": item["question"],
                 "answer": item["answer"],
             })
 
-    # -----------------------------
-    # Company
-    # -----------------------------
-    for item in _company_records(knowledge["company"]):
+    # -------------------------------------------------
+    # COMPANY
+    # -------------------------------------------------
+    for item in _company_records(
+        knowledge["company"]
+    ):
         field = normalize(item["field"])
         value = normalize(item["value"])
 
         score = 0
 
-        if field in q:
-            score += 20
-
-        if value and value in q:
-            score += 30
+        if field and field in q:
+            score = 20
 
         if score > 0:
-            scored.append({
+            results.append({
                 "type": "company",
                 "score": score,
                 "field": item["field"],
                 "value": item["value"],
             })
 
-    scored.sort(
+    results.sort(
         key=lambda item: item["score"],
         reverse=True,
     )
 
-    return scored[:limit]
-
-
-def find_product(product_name: str):
-    query = normalize(product_name)
-
-    for item in _product_records(
-        load_knowledge()["products"]
-    ):
-        if normalize(item["name"]) == query:
-            return item["data"]
-
-    for item in _product_records(
-        load_knowledge()["products"]
-    ):
-        name = normalize(item["name"])
-
-        if name in query or query in name:
-            return item["data"]
-
-    return None
+    return results[:limit]
