@@ -37,8 +37,18 @@ def load_knowledge():
 
 def normalize(text: str) -> str:
     text = str(text).strip().lower()
+
+    # Common punctuation becomes spaces.
+    text = re.sub(
+        r"[၊၊။,!?？!()\[\]{}:;\"'“”‘’\-_/]+",
+        " ",
+        text,
+    )
+
+    # Collapse whitespace.
     text = re.sub(r"\s+", " ", text)
-    return text
+
+    return text.strip()
 
 
 def _product_records(products_data):
@@ -111,13 +121,49 @@ def _company_records(company_data):
     return results
 
 
-def product_name_in_query(query: str, product_name: str) -> bool:
-    """
-    Product retrieval must be conservative.
+def _aliases(product: dict):
+    aliases = product.get("aliases", [])
 
-    We only consider a product matched when:
-    - the complete product name appears in the query, or
-    - all meaningful product-name tokens appear in the query.
+    if isinstance(aliases, str):
+        aliases = [aliases]
+
+    if not isinstance(aliases, list):
+        return []
+
+    return [
+        str(alias).strip()
+        for alias in aliases
+        if str(alias).strip()
+    ]
+
+
+def _latin_tokens(text: str):
+    return [
+        token
+        for token in re.findall(
+            r"[a-z0-9]+",
+            normalize(text),
+        )
+        if len(token) >= 2
+    ]
+
+
+def product_name_in_query(
+    query: str,
+    product_name: str,
+    aliases=None,
+) -> bool:
+    """
+    Conservative product matching.
+
+    Match only when:
+    1. Full product name appears, OR
+    2. Full alias appears, OR
+    3. All meaningful Latin/alphanumeric product-name
+       tokens appear.
+
+    Burmese product names are safely handled by
+    exact normalized substring matching.
     """
 
     q = normalize(query)
@@ -126,24 +172,24 @@ def product_name_in_query(query: str, product_name: str) -> bool:
     if not q or not name:
         return False
 
+    # Exact full product name.
     if name in q:
         return True
 
-    query_words = set(
-        re.findall(r"[a-z0-9]+", q)
-    )
+    # Optional business-defined aliases.
+    for alias in aliases or []:
+        alias = normalize(alias)
 
-    name_words = [
-        word
-        for word in re.findall(
-            r"[a-z0-9]+",
-            name,
-        )
-        if len(word) >= 2
-    ]
+        if alias and alias in q:
+            return True
+
+    # English / alphanumeric product names.
+    name_words = _latin_tokens(name)
 
     if not name_words:
         return False
+
+    query_words = set(_latin_tokens(q))
 
     return all(
         word in query_words
@@ -154,24 +200,30 @@ def product_name_in_query(query: str, product_name: str) -> bool:
 def search_product(query: str):
     matches = []
 
-    for item in _product_records(
-        load_knowledge()["products"]
-    ):
+    products = load_knowledge()["products"]
+
+    for item in _product_records(products):
+        product = item["data"]
+
         if product_name_in_query(
             query,
             item["name"],
+            _aliases(product),
         ):
             matches.append({
                 "type": "product",
                 "score": 100,
                 "name": item["name"],
-                "data": item["data"],
+                "data": product,
             })
 
     return matches
 
 
-def search_knowledge(query: str, limit: int = 5):
+def search_knowledge(
+    query: str,
+    limit: int = 5,
+):
     knowledge = load_knowledge()
 
     q = normalize(query)
@@ -179,21 +231,29 @@ def search_knowledge(query: str, limit: int = 5):
     if not q:
         return []
 
-    results = []
-
     # -------------------------------------------------
     # PRODUCTS
     # -------------------------------------------------
+
     product_matches = search_product(q)
 
+    # Product match has highest priority.
+    # Never let FAQ/company matching replace a verified
+    # product result.
     if product_matches:
         return product_matches[:limit]
 
     # -------------------------------------------------
     # FAQ
     # -------------------------------------------------
+
+    results = []
+
     query_words = set(
-        re.findall(r"[a-z0-9]+|[\u1000-\u109f]+", q)
+        re.findall(
+            r"[a-z0-9]+|[\u1000-\u109f]+",
+            q,
+        )
     )
 
     for item in _faq_records(knowledge["faq"]):
@@ -217,6 +277,7 @@ def search_knowledge(query: str, limit: int = 5):
 
             common = query_words & faq_words
 
+            # Conservative FAQ threshold.
             if len(common) >= 2:
                 score = len(common) * 10
 
@@ -231,11 +292,11 @@ def search_knowledge(query: str, limit: int = 5):
     # -------------------------------------------------
     # COMPANY
     # -------------------------------------------------
+
     for item in _company_records(
         knowledge["company"]
     ):
         field = normalize(item["field"])
-        value = normalize(item["value"])
 
         score = 0
 
