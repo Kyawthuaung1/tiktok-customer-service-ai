@@ -1,0 +1,10 @@
+{
+  "products": [
+    {
+      "name": "Test Product A",
+      "price": "35,000 ကျပ်",
+      "stock": "ရှိသည်",
+      "description": "စမ်းသပ်ရန် product တစ်ခုဖြစ်သည်။"
+    }
+  ]
+}
