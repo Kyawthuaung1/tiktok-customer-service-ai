@@ -1,6 +1,7 @@
 from .knowledge import search_knowledge
 from .memory import ConversationMemory
 from .intent import detect_intent, split_questions
+import re
 
 
 SYSTEM_POLICY = """
@@ -29,7 +30,7 @@ RULES:
    နောက်မေးခွန်းများတွင် ဆက်လက်အသုံးပြုပါ။
 10. Customer က previous message ကို ဆက်စပ်ပြီး မေးလာပါက
     ယခင် context မှ product/entity ကို ဆက်လက်နားလည်ပါ။
-11. Customer complaint ဖြစ်ပါက ယဉ်ကျေးစွာ တောင်းပန်ပြီး
+11. Complaint ဖြစ်ပါက ယဉ်ကျေးစွာ တောင်းပန်ပြီး
     လိုအပ်ပါက Human Agent ဆီ လွှဲပါ။
 12. မသေချာသောအချက်ကို မဖန်တီးပါနှင့်။
 13. စက်ရုပ်ဆန်သော၊ အလွန်ရှည်သော explanation များကို ရှောင်ပါ။
@@ -66,6 +67,32 @@ def is_greeting(text: str) -> bool:
     )
 
 
+def has_explicit_product_like_reference(text: str) -> bool:
+    """
+    Detect whether the customer message appears to contain
+    a specific product/entity reference.
+
+    Example:
+        "iPhone 17 Pro ဘယ်လောက်လဲ" -> True
+        "stock ရှိလား" -> False
+        "ဘယ်လောက်လဲ" -> False
+    """
+
+    text = text.strip().lower()
+
+    # Latin/alphanumeric product names such as:
+    # iPhone 17 Pro, Galaxy S25, AirPods Pro
+    if re.search(r"[a-z]", text):
+        return True
+
+    # Numbers can also identify products.
+    # Avoid treating ordinary question numbers as product names.
+    if re.search(r"\b\d{2,}\b", text):
+        return True
+
+    return False
+
+
 class CustomerServiceAgent:
 
     def __init__(self):
@@ -97,13 +124,15 @@ class CustomerServiceAgent:
         if is_greeting(question):
             return []
 
-        # First try the question exactly as written.
+        # First priority:
+        # Search the customer's current question directly.
         results = search_knowledge(question)
 
         if results:
             return results
 
-        # Use product already discovered in this message.
+        # If this message already has a verified product from
+        # an earlier question in the SAME message, use it.
         if current_product:
             contextual_query = (
                 f"{current_product} {question}"
@@ -116,19 +145,31 @@ class CustomerServiceAgent:
             if results:
                 return results
 
-        # Finally use previous conversation context.
-        last_product = self._last_product(
-            customer_id
-        )
-
-        if last_product:
-            contextual_query = (
-                f"{last_product} {question}"
+        # Only use previous conversation product context when
+        # the current question does NOT explicitly mention another
+        # product/entity.
+        #
+        # This prevents:
+        #   previous = Test Product A
+        #   current  = iPhone 17 Pro
+        #
+        # from incorrectly returning Test Product A.
+        if not has_explicit_product_like_reference(question):
+            last_product = self._last_product(
+                customer_id
             )
 
-            return search_knowledge(
-                contextual_query
-            )
+            if last_product:
+                contextual_query = (
+                    f"{last_product} {question}"
+                )
+
+                results = search_knowledge(
+                    contextual_query
+                )
+
+                if results:
+                    return results
 
         return []
 
@@ -185,8 +226,6 @@ class CustomerServiceAgent:
 
             analyses.append(analysis)
 
-            # Carry product context forward inside
-            # the same customer message.
             if analysis["product"]:
                 current_product = analysis["product"]
 
