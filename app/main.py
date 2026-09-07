@@ -6,20 +6,185 @@ def print_context(context):
     print("[Agent Context]")
     print("Question:", context["question"])
 
-    if context["knowledge"]:
-        print("\nKnowledge found:")
+    if not context["questions"]:
+        print("\nNo questions detected.")
 
-        for item in context["knowledge"]:
-            print(
-                f"- [{item['type']}] "
-                f"score={item['score']} "
-                f"{item}"
-            )
-    else:
-        print("\nKnowledge found: None")
+    for index, item in enumerate(
+        context["questions"],
+        start=1,
+    ):
+        print(f"\nQuestion {index}: {item['question']}")
+        print("Intent:", item["intent"])
 
-    print("Needs human:", context["needs_human"])
+        if item["knowledge"]:
+            print("Knowledge:")
+
+            for knowledge in item["knowledge"]:
+                if knowledge["type"] == "product":
+                    data = knowledge["data"]
+
+                    print(
+                        f"  - Product: "
+                        f"{data.get('name', '')}"
+                    )
+                    print(
+                        f"    Price: "
+                        f"{data.get('price', 'မရှိ')}"
+                    )
+                    print(
+                        f"    Stock: "
+                        f"{data.get('stock', 'မရှိ')}"
+                    )
+
+                elif knowledge["type"] == "faq":
+                    print(
+                        f"  - FAQ: "
+                        f"{knowledge['question']}"
+                    )
+                    print(
+                        f"    Answer: "
+                        f"{knowledge['answer']}"
+                    )
+
+                elif knowledge["type"] == "company":
+                    print(
+                        f"  - "
+                        f"{knowledge['field']}: "
+                        f"{knowledge['value']}"
+                    )
+
+        else:
+            print("Knowledge: None")
+
+        print(
+            "Needs human:",
+            item["needs_human"],
+        )
+
+    print(
+        "\nOverall needs human:",
+        context["needs_human"],
+    )
+
     print("-----------------------------------")
+
+
+def product_reply(item):
+    knowledge = item["knowledge"]
+
+    if not knowledge:
+        return (
+            "ဒီ product အတွက် အတည်ပြုထားတဲ့ "
+            "အချက်အလက် မရှိသေးပါရှင့်။"
+        )
+
+    product = None
+
+    for result in knowledge:
+        if result["type"] == "product":
+            product = result["data"]
+            break
+
+    if not product:
+        return (
+            "ဒီ product အတွက် အတည်ပြုထားတဲ့ "
+            "အချက်အလက် မရှိသေးပါရှင့်။"
+        )
+
+    name = product.get(
+        "name",
+        "ဒီပစ္စည်း",
+    )
+
+    if item["intent"] == "product_price":
+        price = product.get("price")
+
+        if not price:
+            return (
+                f"{name} ရဲ့ ဈေးနှုန်းကို "
+                "အတည်ပြုထားတဲ့ information မရှိသေးပါရှင့်။"
+            )
+
+        return (
+            f"{name} ရဲ့ ဈေးနှုန်းက "
+            f"{price} ပါရှင့်။"
+        )
+
+    if item["intent"] == "product_stock":
+        stock = product.get("stock")
+
+        if not stock:
+            return (
+                f"{name} ရဲ့ stock အခြေအနေကို "
+                "အတည်ပြုထားတဲ့ information မရှိသေးပါရှင့်။"
+            )
+
+        return (
+            f"{name} stock က "
+            f"{stock} ပါရှင့်။"
+        )
+
+    return (
+        f"{name} အကြောင်း အတည်ပြုထားတဲ့ "
+        "အချက်အလက်တွေ ရှိပါတယ်ရှင့်။"
+    )
+
+
+def reply_for_question(item):
+    intent = item["intent"]
+
+    if intent == "product_price":
+        return product_reply(item)
+
+    if intent == "product_stock":
+        return product_reply(item)
+
+    if intent == "delivery":
+        if item["knowledge"]:
+            result = item["knowledge"][0]
+
+            if result["type"] == "faq":
+                return result["answer"]
+
+        return (
+            "Delivery အကြောင်းကိုတော့ "
+            "အတည်ပြုထားတဲ့ information မရှိသေးလို့ပါရှင့်။ "
+            "တာဝန်ရှိသူကို မေးမြန်းပေးပါမယ်နော်။"
+        )
+
+    if intent == "order":
+        if item["knowledge"]:
+            result = item["knowledge"][0]
+
+            if result["type"] == "faq":
+                return result["answer"]
+
+        return (
+            "မှာယူပုံအကြောင်း အတည်ပြုထားတဲ့ "
+            "information မရှိသေးလို့ပါရှင့်။ "
+            "တာဝန်ရှိသူကို မေးမြန်းပေးပါမယ်နော်။"
+        )
+
+    if intent == "complaint":
+        return (
+            "အဆင်မပြေဖြစ်သွားတာအတွက် တောင်းပန်ပါတယ်ရှင့်။ "
+            "တာဝန်ရှိသူဆီ လွှဲပေးပြီး စစ်ဆေးပေးပါမယ်နော်။"
+        )
+
+    if item["knowledge"]:
+        result = item["knowledge"][0]
+
+        if result["type"] == "faq":
+            return result["answer"]
+
+        if result["type"] == "company":
+            return result["value"]
+
+    return (
+        "ဒီအကြောင်းအရာအတွက် အတည်ပြုထားတဲ့ "
+        "information မရှိသေးလို့ပါရှင့်။ "
+        "တာဝန်ရှိသူကို မေးမြန်းပေးပါမယ်နော်။"
+    )
 
 
 def local_reply(context):
@@ -32,44 +197,20 @@ def local_reply(context):
             "ကူညီပေးပါမယ်နော်။"
         )
 
-    knowledge = context["knowledge"]
+    replies = []
 
-    if not knowledge:
-        return (
-            "ဟုတ်ကဲ့ရှင့်။ ဒီအချက်အလက်လေးကိုတော့ "
-            "အခုလက်ရှိ အတည်ပြုထားတဲ့ information မရှိသေးလို့ပါရှင့်။ "
-            "တာဝန်ရှိသူကို မေးမြန်းပြီး ပြန်လည်အကြောင်းကြားပေးပါမယ်နော်။"
+    for item in context["questions"]:
+        replies.append(
+            reply_for_question(item)
         )
 
-    top = knowledge[0]
+    if not replies:
+        return (
+            "ဟုတ်ကဲ့ရှင့်။ "
+            "ဘာအကြောင်းအရာလေး သိချင်တာလဲ ပြောပေးပါနော်။"
+        )
 
-    if top["type"] == "product":
-        data = top["data"]
-
-        name = data.get("name", "ဒီပစ္စည်း")
-        price = data.get("price")
-        stock = data.get("stock")
-
-        parts = [f"{name}"]
-
-        if price:
-            parts.append(f"ဈေးနှုန်း {price}")
-
-        if stock:
-            parts.append(f"Stock {stock}")
-
-        return "ဟုတ်ကဲ့ရှင့် 😊 " + "၊ ".join(parts) + " ပါရှင့်။"
-
-    if top["type"] == "faq":
-        return f"ဟုတ်ကဲ့ရှင့် 😊 {top['answer']}"
-
-    if top["type"] == "company":
-        return f"ဟုတ်ကဲ့ရှင့် 😊 {top['value']}"
-
-    return (
-        "ဟုတ်ကဲ့ရှင့်။ "
-        "သက်ဆိုင်ရာအချက်အလက်ကို ရှာတွေ့ထားပါတယ်ရှင့်။"
-    )
+    return "\n".join(replies)
 
 
 def main():
