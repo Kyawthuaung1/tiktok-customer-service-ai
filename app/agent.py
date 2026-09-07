@@ -1,30 +1,37 @@
 from .knowledge import search_knowledge
 from .memory import ConversationMemory
+from .intent import detect_intent, split_questions
 
 
 SYSTEM_POLICY = """
 သင်သည် မြန်မာဘာသာဖြင့် Customer Service Representative အဖြစ်
 တာဝန်ထမ်းဆောင်သော AI Agent ဖြစ်သည်။
 
+အဓိကတာဝန်မှာ Customer ကို လူသား Customer Service Representative
+တစ်ယောက်ကဲ့သို့ သဘာဝကျ၊ ယဉ်ကျေးပြီး တိုက်ရိုက်ကူညီပေးရန်ဖြစ်သည်။
+
 RULES:
 
-1. Customer ကို မြန်မာလို သဘာဝကျပြီး ယဉ်ကျေးစွာ ပြောပါ။
-2. Customer ၏ မေးခွန်းကို တိုက်ရိုက်နားလည်ပြီး လိုအပ်သလောက်သာ ဖြေပါ။
-3. Business Knowledge Base ထဲတွင်ရှိသော အချက်အလက်ကိုသာ
-   business fact အဖြစ် အသုံးပြုပါ။
-4. ဈေးနှုန်း၊ stock၊ promotion၊ delivery fee၊ delivery time၊
-   warranty၊ policy စသည့်အချက်များကို မခန့်မှန်းပါနှင့်။
-5. Knowledge Base တွင် မရှိသောအချက်ကို မဖန်တီးပါနှင့်။
-6. Product တစ်ခုကို မေးလာပါက သက်ဆိုင်ရာ product record ကို
-   ဦးစားပေးအသုံးပြုပါ။
-7. Product မတွေ့ပါက အခြား product ၏ information ကို
+1. Customer ကို မြန်မာလို သဘာဝကျစွာ ပြောပါ။
+2. Customer မေးထားသောအချက်ကိုသာ အဓိကဖြေပါ။
+3. Business Knowledge Base ကို business facts အတွက် source of truth
+   အဖြစ် အသုံးပြုပါ။
+4. Knowledge Base ထဲမရှိသော ဈေးနှုန်း၊ stock၊ promotion၊ delivery fee၊
+   delivery time၊ warranty သို့မဟုတ် policy ကို မခန့်မှန်းပါနှင့်။
+5. Product မတွေ့ပါက အခြား product ၏ information ကို
    အစားထိုးမဖြေပါနှင့်။
-8. Greeting ဖြစ်ပါက သဘာဝကျစွာ ပြန်နှုတ်ဆက်ပါ။
-9. Customer မေးခွန်းများစွာ မေးပါက တစ်ခုချင်းစီ ဖြေပါ။
-10. ယခင် conversation context ကို ထည့်သွင်းစဉ်းစားပါ။
-11. မသေချာသောအချက်ကို မခန့်မှန်းဘဲ ရိုးရိုးသားသား ပြောပါ။
-12. Customer complaint ဖြစ်ပါက ယဉ်ကျေးစွာ တောင်းပန်ပြီး
-    လိုအပ်ပါက Human Agent ဆီ လွှဲပေးပါ။
+6. Knowledge မရှိပါက ရိုးရိုးသားသားပြောပြီး Human Agent ဆီ
+   လွှဲပေးနိုင်ပါသည်။
+7. Customer မေးခွန်းများစွာရှိပါက တစ်ခုချင်းစီ စဉ်းစားပြီး ဖြေပါ။
+8. ယခင် conversation context ကို အသုံးပြုပါ။
+9. Message တစ်ခုထဲတွင် follow-up question ပါလာပါက
+   အဲဒီ message ထဲမှာ အရင်ဖော်ပြထားသော product/entity ကို
+   နောက်မေးခွန်းများတွင် ဆက်လက်အသုံးပြုပါ။
+10. Customer က previous message ကို ဆက်စပ်ပြီး မေးလာပါက
+    ယခင် context မှ product/entity ကို ဆက်လက်နားလည်ပါ။
+11. Customer complaint ဖြစ်ပါက ယဉ်ကျေးစွာ တောင်းပန်ပြီး
+    လိုအပ်ပါက Human Agent ဆီ လွှဲပါ။
+12. မသေချာသောအချက်ကို မဖန်တီးပါနှင့်။
 13. စက်ရုပ်ဆန်သော၊ အလွန်ရှည်သော explanation များကို ရှောင်ပါ။
 """
 
@@ -60,31 +67,145 @@ def is_greeting(text: str) -> bool:
 
 
 class CustomerServiceAgent:
+
     def __init__(self):
         self.memory = ConversationMemory()
 
-    def retrieve(self, question: str):
+    def _last_product(self, customer_id: str):
+        history = self.memory.get(customer_id)
+
+        for message in reversed(history):
+            if message["role"] != "user":
+                continue
+
+            results = search_knowledge(
+                message["content"]
+            )
+
+            for result in results:
+                if result["type"] == "product":
+                    return result["name"]
+
+        return None
+
+    def retrieve(
+        self,
+        customer_id: str,
+        question: str,
+        current_product: str | None = None,
+    ):
         if is_greeting(question):
             return []
 
-        return search_knowledge(question)
+        # First try the question exactly as written.
+        results = search_knowledge(question)
 
-    def build_context(self, customer_id: str, question: str):
-        history = self.memory.get(customer_id)
-        knowledge = self.retrieve(question)
+        if results:
+            return results
+
+        # Use product already discovered in this message.
+        if current_product:
+            contextual_query = (
+                f"{current_product} {question}"
+            )
+
+            results = search_knowledge(
+                contextual_query
+            )
+
+            if results:
+                return results
+
+        # Finally use previous conversation context.
+        last_product = self._last_product(
+            customer_id
+        )
+
+        if last_product:
+            contextual_query = (
+                f"{last_product} {question}"
+            )
+
+            return search_knowledge(
+                contextual_query
+            )
+
+        return []
+
+    def analyze_question(
+        self,
+        customer_id: str,
+        question: str,
+        current_product: str | None = None,
+    ):
+        intent = detect_intent(question)
+
+        knowledge = self.retrieve(
+            customer_id,
+            question,
+            current_product,
+        )
+
+        detected_product = current_product
+
+        for result in knowledge:
+            if result["type"] == "product":
+                detected_product = result["name"]
+                break
 
         return {
-            "policy": SYSTEM_POLICY.strip(),
-            "history": history,
-            "knowledge": knowledge,
             "question": question,
+            "intent": intent,
+            "knowledge": knowledge,
+            "product": detected_product,
             "needs_human": (
                 len(knowledge) == 0
                 and not is_greeting(question)
             ),
         }
 
-    def receive(self, customer_id: str, question: str):
+    def build_context(
+        self,
+        customer_id: str,
+        question: str,
+    ):
+        history = self.memory.get(customer_id)
+
+        questions = split_questions(question)
+
+        analyses = []
+        current_product = None
+
+        for item in questions:
+            analysis = self.analyze_question(
+                customer_id,
+                item,
+                current_product,
+            )
+
+            analyses.append(analysis)
+
+            # Carry product context forward inside
+            # the same customer message.
+            if analysis["product"]:
+                current_product = analysis["product"]
+
+        return {
+            "policy": SYSTEM_POLICY.strip(),
+            "history": history,
+            "question": question,
+            "questions": analyses,
+            "needs_human": any(
+                item["needs_human"]
+                for item in analyses
+            ),
+        }
+
+    def receive(
+        self,
+        customer_id: str,
+        question: str,
+    ):
         context = self.build_context(
             customer_id,
             question,
@@ -98,7 +219,11 @@ class CustomerServiceAgent:
 
         return context
 
-    def record_reply(self, customer_id: str, reply: str):
+    def record_reply(
+        self,
+        customer_id: str,
+        reply: str,
+    ):
         self.memory.add(
             customer_id,
             "assistant",
